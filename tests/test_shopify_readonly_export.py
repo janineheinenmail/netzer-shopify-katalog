@@ -109,6 +109,58 @@ class ReadOnlyExportTests(unittest.TestCase):
         with self.assertRaises(exporter.ExportError):
             exporter.paginate(client, "query", "products")
 
+    def test_nested_page_continues_at_embedded_cursor(self):
+        initial = {"nodes": [{"id": "c1"}], "pageInfo": {"hasNextPage": True, "endCursor": "c1cursor"}}
+        client = MagicMock()
+        client.execute.return_value = {"product": {"collections": {
+            "nodes": [{"id": "c2"}], "pageInfo": {"hasNextPage": False, "endCursor": "c2cursor"}
+        }}}
+        result = exporter.finish_nested(client, {"id": "p1", "collections": initial}, "collections", exporter.PRODUCT_COLLECTIONS_QUERY, "product")
+        self.assertEqual([n["id"] for n in result], ["c1", "c2"])
+        self.assertEqual(client.execute.call_args.args[1]["after"], "c1cursor")
+        client.execute.assert_called_once()
+
+    def test_nested_duplicate_and_invalid_page_info_rejected(self):
+        for page_info, next_nodes in [
+            ({"hasNextPage": "false"}, []),
+            ({"hasNextPage": True, "endCursor": "a"}, [{"id": "c1"}]),
+        ]:
+            with self.subTest(page_info=page_info):
+                client = MagicMock()
+                client.execute.return_value = {"product": {"collections": {
+                    "nodes": next_nodes, "pageInfo": {"hasNextPage": False}
+                }}}
+                with self.assertRaises(exporter.ExportError):
+                    exporter.finish_nested(client, {"id": "p1", "collections": {"nodes": [{"id": "c1"}], "pageInfo": page_info}}, "collections", exporter.PRODUCT_COLLECTIONS_QUERY, "product")
+
+    def test_export_reuses_embedded_pages_and_preserves_output(self):
+        def connection(nodes):
+            return {"nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None}}
+        client = MagicMock()
+        products = [{"id": f"p{i}", "title": "private-title", "variants": connection([{"id": f"v{i}"}]), "media": connection([]), "collections": connection([{"id": "c1"}])} for i in range(10)]
+        client.execute.side_effect = [
+            {"menus": connection([{"id": "m1", "handle": "main-menu-ii"}])},
+            {"products": connection(products)},
+            {"collections": connection([{"id": "c1", "products": connection([{"id": f"p{i}"} for i in range(10)])}])},
+        ]
+        with patch("builtins.print") as output:
+            result = exporter.export_all(client, {}, "2026-07")
+        self.assertTrue(result["complete"])
+        self.assertEqual(result["counts"], {"menus": 1, "products": 10, "collections": 1})
+        self.assertEqual(result["products"][0]["variants"], [{"id": "v0"}])
+        self.assertEqual(result["products"][0]["collectionIds"], ["c1"])
+        self.assertNotIn("collections", result["products"][0])
+        self.assertEqual(client.execute.call_count, 3)
+        self.assertNotIn("private-title", str(output.call_args_list))
+        self.assertTrue(all(call.kwargs.get("flush") for call in output.call_args_list))
+
+    @patch.object(exporter.urllib.request, "urlopen")
+    def test_deadline_stops_before_network_request(self, urlopen):
+        client = exporter.ShopifyGraphQL("netzer-dental.myshopify.com", "2026-07", "token", deadline=0)
+        with self.assertRaisesRegex(exporter.ExportError, "Zeitbudget"):
+            client.execute("query { shop { id } }", {})
+        urlopen.assert_not_called()
+
     def test_atomic_json_does_not_store_token(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "result.json"
@@ -143,3 +195,4 @@ class ReadOnlyExportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
