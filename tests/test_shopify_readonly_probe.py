@@ -13,10 +13,23 @@ SPEC.loader.exec_module(probe)
 
 
 class ReadOnlyProbeTests(unittest.TestCase):
+    def test_configuration_rejects_another_matching_shop(self):
+        values = {
+            "SHOPIFY_SHOP_DOMAIN": "another-shop.myshopify.com",
+            "SHOPIFY_EXPECTED_SHOP_DOMAIN": "another-shop.myshopify.com",
+            "SHOPIFY_EXPECTED_PRIMARY_DOMAIN": "netzer-dental.de",
+            "SHOPIFY_API_VERSION": "2026-07",
+            "SHOPIFY_CLIENT_ID": "not-a-real-client-id",
+            "SHOPIFY_CLIENT_SECRET": "not-a-real-client-secret",
+        }
+        with patch.dict(os.environ, values, clear=True):
+            with self.assertRaises(probe.ConfigurationError):
+                probe.validate_configuration()
+
     def test_configuration_rejects_different_target(self):
         values = {
             "SHOPIFY_SHOP_DOMAIN": "wrong-shop.myshopify.com",
-            "SHOPIFY_EXPECTED_SHOP_DOMAIN": "netzer.myshopify.com",
+            "SHOPIFY_EXPECTED_SHOP_DOMAIN": "netzer-dental.myshopify.com",
             "SHOPIFY_EXPECTED_PRIMARY_DOMAIN": "netzer-dental.de",
             "SHOPIFY_API_VERSION": "2026-07",
             "SHOPIFY_CLIENT_ID": "not-a-real-client-id",
@@ -28,8 +41,8 @@ class ReadOnlyProbeTests(unittest.TestCase):
 
     def test_configuration_rejects_foreign_primary_domain(self):
         values = {
-            "SHOPIFY_SHOP_DOMAIN": "netzer.myshopify.com",
-            "SHOPIFY_EXPECTED_SHOP_DOMAIN": "netzer.myshopify.com",
+            "SHOPIFY_SHOP_DOMAIN": "netzer-dental.myshopify.com",
+            "SHOPIFY_EXPECTED_SHOP_DOMAIN": "netzer-dental.myshopify.com",
             "SHOPIFY_EXPECTED_PRIMARY_DOMAIN": "example.org",
             "SHOPIFY_API_VERSION": "2026-07",
             "SHOPIFY_CLIENT_ID": "not-a-real-client-id",
@@ -46,15 +59,17 @@ class ReadOnlyProbeTests(unittest.TestCase):
         }
         with self.assertRaises(RuntimeError):
             probe.verify_identity(
-                identity, "netzer.myshopify.com", "netzer-dental.de"
+                identity, "netzer-dental.myshopify.com", "netzer-dental.de"
             )
 
     def test_identity_accepts_exact_domains(self):
         identity = {
-            "myshopifyDomain": "netzer.myshopify.com",
+            "myshopifyDomain": "netzer-dental.myshopify.com",
             "primaryDomain": {"host": "netzer-dental.de"},
         }
-        probe.verify_identity(identity, "netzer.myshopify.com", "netzer-dental.de")
+        probe.verify_identity(
+            identity, "netzer-dental.myshopify.com", "netzer-dental.de"
+        )
 
     @patch.object(probe.urllib.request, "urlopen")
     def test_token_exchange_uses_client_credentials_without_logging(self, urlopen):
@@ -63,12 +78,15 @@ class ReadOnlyProbeTests(unittest.TestCase):
         response.__iter__.return_value = iter(response.read.return_value.splitlines())
 
         token = probe.exchange_token(
-            "netzer.myshopify.com", "client-id", "client-secret"
+            "netzer-dental.myshopify.com", "client-id", "client-secret"
         )
 
         self.assertEqual(token, "short-lived-token")
         request = urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "https://netzer.myshopify.com/admin/oauth/access_token")
+        self.assertEqual(
+            request.full_url,
+            "https://netzer-dental.myshopify.com/admin/oauth/access_token",
+        )
         self.assertIn(b'"grant_type": "client_credentials"', request.data)
 
 

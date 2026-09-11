@@ -25,9 +25,9 @@ Diese Werte in den **Environment variables** der Codex-Cloud-Umgebung setzen:
 
 | Name | Wert |
 | --- | --- |
-| `SHOPIFY_SHOP_DOMAIN` | Die noch zu bestaetigende interne Domain im Format `…myshopify.com`, ohne Protokoll oder Pfad |
-| `SHOPIFY_EXPECTED_SHOP_DOMAIN` | Exakt dieselbe, unabhaengig bestaetigte interne Domain als Sicherheitsvergleich |
-| `SHOPIFY_EXPECTED_PRIMARY_DOMAIN` | `netzer-dental.de` (nur abweichend setzen, wenn Shopify tatsaechlich eine Netzer-Dental-Subdomain als Primaerdomain meldet) |
+| `SHOPIFY_SHOP_DOMAIN` | `netzer-dental.myshopify.com` |
+| `SHOPIFY_EXPECTED_SHOP_DOMAIN` | `netzer-dental.myshopify.com` als unabhaengiger Sicherheitsvergleich |
+| `SHOPIFY_EXPECTED_PRIMARY_DOMAIN` | `netzer-dental.de` |
 | `SHOPIFY_API_VERSION` | Eine von der App unterstuetzte, stabile Version im Format `YYYY-MM` |
 
 Die interne Domain darf nicht aus dem App-Namen, der Client ID oder der
@@ -63,10 +63,46 @@ bash scripts/codex_cloud_setup.sh
 ```
 
 Das Skript prueft zuerst, dass alle Variablen vorhanden sind. Das Python-Programm
-validiert anschliessend lokal Ziel- und Erwartungsdomains, erzeugt ueber den
-Client-Credentials-Grant ein Token im RAM und fuehrt genau die Query
-`ReadOnlyShopIdentity` aus. Erst deren exakte Uebereinstimmung mit beiden
-erwarteten Domains gilt als erfolgreiche Verbindung.
+validiert anschliessend lokal Ziel- und Erwartungsdomains gegen die fest
+vorgegebenen Netzer-Dental-Domains, erzeugt ueber den Client-Credentials-Grant
+ein Token im RAM und fuehrt zuerst genau die Query `ReadOnlyShopIdentity` aus.
+Erst deren exakte Uebereinstimmung mit beiden erwarteten Domains erlaubt den
+anschliessenden Nur-Lese-Export im selben Prozess.
+
+Vor jedem Lauf werden ausschliesslich die bekannten alten Ergebnisdateien unter
+`private/` entfernt. Nach erfolgreicher Identitaetspruefung enthaelt
+`private/setup-result.json` Zeitstempel, beide tatsaechlich gelesenen Domains,
+API-Version und Pruefstatus, aber keine Zugangsdaten und kein Token. Der Export
+`private/shopify-phase-1-export.json` umfasst alle Menues samt verschachtelten
+Eintraegen und Linkzielen, alle Produkte samt Varianten, Medien und
+Kollektionszugehoerigkeiten sowie alle Kollektionen samt Regeln, Bildern und
+vollstaendig paginierten Produktzugehoerigkeiten. Er enthaelt Start- und
+Abschlusszeit, Objektzahlen und `complete: true`.
+
+Jeder Setup-Versuch entfernt die bekannten alten Ergebnisdateien, bevor die
+Konfiguration validiert wird. Auch eine fehlende Variable kann deshalb keinen
+alten Erfolgsnachweis oder vollstaendigen Export zuruecklassen und erzeugt einen
+aktuellen, nicht geheimen Fehlernachweis mit Zeitstempel und Fehlerart.
+
+Bei Fehlern wird kein vollstaendiger Export hinterlassen. Stattdessen markiert
+`private/shopify-phase-1-incomplete.json` den fehlgeschlagenen Stand mit
+`complete: false`; er darf nicht ausgewertet werden. API-Drosselung wird mit
+begrenzten Warteversuchen behandelt. Die Wartezeit wird aus angefragten Kosten,
+verfuegbaren Punkten und Wiederherstellungsrate berechnet; fehlen diese Angaben,
+kommt begrenztes exponentielles Backoff zum Einsatz. Nur Drosselungsantworten
+werden wiederholt. Fehlende Berechtigungen, ungueltige oder wiederholte Cursor,
+fehlende Seiteninformationen, uneindeutiges beziehungsweise fehlendes
+`main-menu-ii` und dauerhaft aktive API-Limits brechen den Export ab.
+
+Die Query-Texte sind durch Tests als reine Queries ohne Mutation abgesichert.
+Eine Live-Validierung gegen das Schema der konfigurierten API-Version war bei
+der Implementierung nicht moeglich: Die oeffentliche Shopify-Dokumentation war
+aus der Ausfuehrungsumgebung nicht abrufbar, und ein Admin-Schema ist ohne die
+nur im Setup verfuegbaren Zugangsdaten nicht erreichbar. Der naechste
+Setup-Lauf sendet jede Query an genau den mit `SHOPIFY_API_VERSION`
+konfigurierten Endpunkt. Schema- oder Feldfehler brechen den Lauf ab und lassen
+keinen mit `complete: true` markierten Export zurueck. Diese Laufzeitpruefung
+ersetzt keine vorab durchgefuehrte vollstaendige Schema-Validierung.
 
 Der Setup-Schritt benoetigt ausgehenden HTTPS-Zugriff auf genau die bestaetigte
 `*.myshopify.com`-Domain (TCP 443) fuer den Token-Endpunkt und die Shopify Admin
@@ -79,14 +115,14 @@ separat konfigurierbaren Internetfreigabe der Agentenphase. Quelle:
 
 ## Reihenfolge nach der Einrichtung
 
-1. Setup einmal nur mit dem Identitaetscheck ausfuehren.
+1. Setup ausfuehren; Identitaetscheck und Nur-Lese-Export laufen im selben
+   Prozess.
 2. Bei einer Abweichung nichts korrigieren oder umgehen, sondern die interne
    Shop-Domain beziehungsweise Installation im Shopify-Admin pruefen.
-3. Nach bestaetigter Identitaet den vollstaendig paginierten, weiterhin nur im
-   Setup laufenden Katalogexport implementieren und ausfuehren. Der Export wird
-   unter einem von Git ignorierten Pfad abgelegt; Zugriffstoken werden nie darin
-   gespeichert.
-4. Erst danach Menue `Main menu II` / `main-menu-ii`, Produkt- und
+3. Nur wenn `private/shopify-phase-1-export.json` `complete: true` enthaelt, den
+   gespeicherten Export in der Agentenphase auswerten. Zugriffstoken werden nie
+   darin gespeichert.
+4. Dann Menue `Main menu II` / `main-menu-ii`, Produkt- und
    Kollektionszahlen sowie Zuordnungen auswerten und den Phase-1-Pruefbericht
    erstellen.
 
