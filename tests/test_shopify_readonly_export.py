@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 MODULE_PATH = Path(__file__).parents[1] / "scripts" / "shopify_readonly_export.py"
@@ -22,6 +22,39 @@ class FakeClient:
 
 
 class ReadOnlyExportTests(unittest.TestCase):
+    @patch.object(exporter.time, "sleep")
+    @patch.object(exporter.urllib.request, "urlopen")
+    def test_throttled_query_waits_for_requested_cost(self, urlopen, sleep):
+        throttled = MagicMock()
+        throttled.__enter__.return_value.read.return_value = json.dumps(
+            {
+                "errors": [{"extensions": {"code": "THROTTLED"}}],
+                "extensions": {
+                    "cost": {
+                        "requestedQueryCost": 50,
+                        "throttleStatus": {
+                            "currentlyAvailable": 10,
+                            "restoreRate": 20,
+                        },
+                    }
+                },
+            }
+        ).encode()
+        successful = MagicMock()
+        successful.__enter__.return_value.read.return_value = (
+            b'{"data":{"shop":{"id":"1"}}}'
+        )
+        urlopen.side_effect = [throttled, successful]
+
+        client = exporter.ShopifyGraphQL(
+            "netzer-dental.myshopify.com", "2026-07", "short-lived-token"
+        )
+        self.assertEqual(
+            client.execute("query { shop { id } }", {}), {"shop": {"id": "1"}}
+        )
+
+        sleep.assert_called_once_with(2.0)
+
     def test_export_queries_are_read_only(self):
         queries = (
             exporter.MENUS_QUERY,

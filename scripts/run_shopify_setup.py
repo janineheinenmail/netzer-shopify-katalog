@@ -44,12 +44,18 @@ def main() -> int:
         return 0
     except (probe.ConfigurationError, RuntimeError, OSError) as exc:
         exporter.EXPORT_PATH.unlink(missing_ok=True)
+        status = (
+            "configuration_failed"
+            if isinstance(exc, probe.ConfigurationError)
+            else "export_failed"
+        )
         exporter.atomic_json(
             exporter.INCOMPLETE_PATH,
             {
                 "complete": False,
                 "failedAt": exporter.utc_now(),
-                "status": "export_failed",
+                "status": status,
+                "error": str(exc),
             },
         )
         print(f"ABBRUCH: {exc}", file=sys.stderr)

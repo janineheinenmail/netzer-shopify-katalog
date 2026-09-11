@@ -79,12 +79,30 @@ Kollektionszugehoerigkeiten sowie alle Kollektionen samt Regeln, Bildern und
 vollstaendig paginierten Produktzugehoerigkeiten. Er enthaelt Start- und
 Abschlusszeit, Objektzahlen und `complete: true`.
 
+Jeder Setup-Versuch entfernt die bekannten alten Ergebnisdateien, bevor die
+Konfiguration validiert wird. Auch eine fehlende Variable kann deshalb keinen
+alten Erfolgsnachweis oder vollstaendigen Export zuruecklassen und erzeugt einen
+aktuellen, nicht geheimen Fehlernachweis mit Zeitstempel und Fehlerart.
+
 Bei Fehlern wird kein vollstaendiger Export hinterlassen. Stattdessen markiert
 `private/shopify-phase-1-incomplete.json` den fehlgeschlagenen Stand mit
 `complete: false`; er darf nicht ausgewertet werden. API-Drosselung wird mit
-begrenzten Warteversuchen behandelt. Fehlende Berechtigungen, ungueltige oder
-wiederholte Cursor, fehlende Seiteninformationen, uneindeutiges beziehungsweise
-fehlendes `main-menu-ii` und dauerhaft aktive API-Limits brechen den Export ab.
+begrenzten Warteversuchen behandelt. Die Wartezeit wird aus angefragten Kosten,
+verfuegbaren Punkten und Wiederherstellungsrate berechnet; fehlen diese Angaben,
+kommt begrenztes exponentielles Backoff zum Einsatz. Nur Drosselungsantworten
+werden wiederholt. Fehlende Berechtigungen, ungueltige oder wiederholte Cursor,
+fehlende Seiteninformationen, uneindeutiges beziehungsweise fehlendes
+`main-menu-ii` und dauerhaft aktive API-Limits brechen den Export ab.
+
+Die Query-Texte sind durch Tests als reine Queries ohne Mutation abgesichert.
+Eine Live-Validierung gegen das Schema der konfigurierten API-Version war bei
+der Implementierung nicht moeglich: Die oeffentliche Shopify-Dokumentation war
+aus der Ausfuehrungsumgebung nicht abrufbar, und ein Admin-Schema ist ohne die
+nur im Setup verfuegbaren Zugangsdaten nicht erreichbar. Der naechste
+Setup-Lauf sendet jede Query an genau den mit `SHOPIFY_API_VERSION`
+konfigurierten Endpunkt. Schema- oder Feldfehler brechen den Lauf ab und lassen
+keinen mit `complete: true` markierten Export zurueck. Diese Laufzeitpruefung
+ersetzt keine vorab durchgefuehrte vollstaendige Schema-Validierung.
 
 Der Setup-Schritt benoetigt ausgehenden HTTPS-Zugriff auf genau die bestaetigte
 `*.myshopify.com`-Domain (TCP 443) fuer den Token-Endpunkt und die Shopify Admin

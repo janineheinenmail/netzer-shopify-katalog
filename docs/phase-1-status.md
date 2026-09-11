@@ -54,6 +54,12 @@ erfunden.
    Export aus `private/` auswerten. Bei fehlendem oder mehrdeutigem
    `main-menu-ii` erzeugt das Setup keinen vollstaendigen Export.
 
+Eine vorgelagerte Live-Schema-Validierung der Exportabfragen war in der
+Agentenumgebung mangels erreichbarer Shopify-Dokumentation und ohne die bewusst
+nur im Setup verfuegbaren Zugangsdaten nicht moeglich. Der neue Setup-Lauf
+validiert die Abfragen praktisch am konfigurierten API-Endpunkt und verwirft den
+Vollstaendigkeitsstatus bei jedem Schemafehler.
+
 Details und offizielle Dokumentationsverweise stehen in
 [`codex-cloud-connection.md`](codex-cloud-connection.md).
 

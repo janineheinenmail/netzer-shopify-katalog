@@ -83,7 +83,7 @@ class ShopifyGraphQL:
                     try:
                         delay = float(exc.headers.get("Retry-After", "1"))
                     except (TypeError, ValueError):
-                        delay = 1.0
+                        delay = 2**attempt
                     delay = min(delay, 30.0)
                     time.sleep(max(delay, 0.1))
                     continue
@@ -108,14 +108,7 @@ class ShopifyGraphQL:
                     and isinstance(error.get("extensions"), dict)
                 }
                 if "THROTTLED" in codes and attempt < 5:
-                    status = (
-                        payload.get("extensions", {})
-                        .get("cost", {})
-                        .get("throttleStatus", {})
-                    )
-                    available = float(status.get("currentlyAvailable", 0))
-                    restore = float(status.get("restoreRate", 1)) or 1
-                    time.sleep(min(max((1 - available) / restore, 0.1), 30.0))
+                    time.sleep(self._throttle_delay(payload, attempt))
                     continue
                 if codes & {"ACCESS_DENIED", "FORBIDDEN"}:
                     raise ExportError(
@@ -129,6 +122,21 @@ class ShopifyGraphQL:
                 raise ExportError("Shopify lieferte keine verwertbaren Daten")
             return data
         raise ExportError("Shopify API-Limit blieb nach mehreren Warteversuchen aktiv")
+
+    @staticmethod
+    def _throttle_delay(payload: object, attempt: int) -> float:
+        """Wartezeit fuer eine abgewiesene Query, begrenzt auf 0,1 bis 30 s."""
+        try:
+            cost = payload["extensions"]["cost"]
+            requested = float(cost["requestedQueryCost"])
+            status = cost["throttleStatus"]
+            available = float(status["currentlyAvailable"])
+            restore = float(status["restoreRate"])
+            if requested < 0 or available < 0 or restore <= 0:
+                raise ValueError
+            return min(max((requested - available) / restore, 0.1), 30.0)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return min(float(2**attempt), 30.0)
 
 
 def menu_item_fields(depth: int = 8) -> str:
