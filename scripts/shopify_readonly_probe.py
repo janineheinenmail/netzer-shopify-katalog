@@ -19,6 +19,8 @@ import urllib.request
 
 DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.myshopify\.com$")
 VERSION_RE = re.compile(r"^\d{4}-\d{2}$")
+NETZER_SHOP_DOMAIN = "netzer-dental.myshopify.com"
+NETZER_PRIMARY_DOMAIN = "netzer-dental.de"
 QUERY = """query ReadOnlyShopIdentity {
   shop {
     name
@@ -48,13 +50,19 @@ def validate_configuration() -> tuple[str, str, str, str, str, str]:
     client_secret = required("SHOPIFY_CLIENT_SECRET")
 
     if not DOMAIN_RE.fullmatch(shop) or not DOMAIN_RE.fullmatch(expected_shop):
-        raise ConfigurationError("Shop-Domains muessen gueltige *.myshopify.com-Domains sein")
+        raise ConfigurationError(
+            "Shop-Domains muessen gueltige *.myshopify.com-Domains sein"
+        )
     if shop != expected_shop:
-        raise ConfigurationError("Ziel- und erwartete Shop-Domain stimmen nicht ueberein")
-    if expected_primary != "netzer-dental.de" and not expected_primary.endswith(
-        ".netzer-dental.de"
-    ):
-        raise ConfigurationError("Erwartete Primaerdomain gehoert nicht zu netzer-dental.de")
+        raise ConfigurationError(
+            "Ziel- und erwartete Shop-Domain stimmen nicht ueberein"
+        )
+    if expected_shop != NETZER_SHOP_DOMAIN:
+        raise ConfigurationError(
+            "Erwartete Shop-Domain ist nicht netzer-dental.myshopify.com"
+        )
+    if expected_primary != NETZER_PRIMARY_DOMAIN:
+        raise ConfigurationError("Erwartete Primaerdomain ist nicht netzer-dental.de")
     if not VERSION_RE.fullmatch(api_version):
         raise ConfigurationError("SHOPIFY_API_VERSION muss das Format YYYY-MM haben")
     return shop, expected_shop, expected_primary, api_version, client_id, client_secret
@@ -79,7 +87,9 @@ def exchange_token(shop: str, client_id: str, client_secret: str) -> str:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.load(response)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Token-Endpunkt antwortete mit HTTP-Status {exc.code}") from None
+        raise RuntimeError(
+            f"Token-Endpunkt antwortete mit HTTP-Status {exc.code}"
+        ) from None
     token = payload.get("access_token")
     if not isinstance(token, str) or not token:
         raise RuntimeError("Token-Endpunkt lieferte kein verwertbares Zugriffstoken")
@@ -104,17 +114,25 @@ def fetch_identity(shop: str, api_version: str, token: str) -> dict[str, object]
         # Keine Response-Bodies ausgeben: Sie koennten unvorhergesehene Daten enthalten.
         raise RuntimeError(f"Shopify antwortete mit HTTP-Status {exc.code}") from None
     if payload.get("errors"):
-        raise RuntimeError("Shopify GraphQL meldete einen Fehler; Details werden nicht protokolliert")
+        raise RuntimeError(
+            "Shopify GraphQL meldete einen Fehler; Details werden nicht protokolliert"
+        )
     try:
         return payload["data"]["shop"]
     except (KeyError, TypeError):
-        raise RuntimeError("Shopify lieferte keine verwertbare Shop-Identitaet") from None
+        raise RuntimeError(
+            "Shopify lieferte keine verwertbare Shop-Identitaet"
+        ) from None
 
 
-def verify_identity(identity: dict[str, object], expected_shop: str, expected_primary: str) -> None:
+def verify_identity(
+    identity: dict[str, object], expected_shop: str, expected_primary: str
+) -> None:
     actual_shop = str(identity.get("myshopifyDomain", "")).lower()
     primary = identity.get("primaryDomain")
-    actual_primary = str(primary.get("host", "")).lower() if isinstance(primary, dict) else ""
+    actual_primary = (
+        str(primary.get("host", "")).lower() if isinstance(primary, dict) else ""
+    )
     if actual_shop != expected_shop or actual_primary != expected_primary:
         raise RuntimeError("IDENTITAET NICHT BESTAETIGT; Katalogabruf ist gesperrt")
 
@@ -130,7 +148,9 @@ def main() -> int:
     except (ConfigurationError, RuntimeError) as exc:
         print(f"ABBRUCH: {exc}", file=sys.stderr)
         return 2
-    print("OK: Netzer-Dental-Shopidentitaet wurde bestaetigt; keine Katalogdaten gelesen.")
+    print(
+        "OK: Netzer-Dental-Shopidentitaet wurde bestaetigt; keine Katalogdaten gelesen."
+    )
     return 0
 
 

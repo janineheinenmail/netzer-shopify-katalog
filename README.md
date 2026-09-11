@@ -15,5 +15,7 @@ bash scripts/codex_cloud_setup.sh
 Die nicht geheimen Variablen und die beiden geschuetzten Secrets sind in
 [`docs/codex-cloud-connection.md`](docs/codex-cloud-connection.md) beschrieben.
 Der Setup-Schritt tauscht Client-Zugangsdaten im Arbeitsspeicher gegen ein
-kurzlebiges Token und prueft ausschliesslich die Shop-Identitaet. `.env`,
-Exporte, Sicherungen und Logs werden durch `.gitignore` ausgeschlossen.
+kurzlebiges Token, prueft zuerst die Shop-Identitaet und exportiert danach
+ausschliesslich lesend Menues, Produkte und Kollektionen nach `private/`. Die
+Agentenphase verwendet nur diesen Export. `.env`, Exporte, Sicherungen und Logs
+werden durch `.gitignore` ausgeschlossen.
