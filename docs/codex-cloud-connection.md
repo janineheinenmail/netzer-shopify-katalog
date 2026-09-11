@@ -131,3 +131,33 @@ Stand wegen fehlender DNS-/Web-Erreichbarkeit nicht live geladen werden. Vor
 der Eingabe der Secrets sollten die verlinkten Seiten im Browser geoeffnet und
 insbesondere Token-Lebensdauer und Codex-Secret-Verfuegbarkeit auf eventuelle
 Aenderungen geprueft werden.
+
+
+
+## Optimierter Export nach Setup-Timeout
+
+Ein beobachteter Setup-Lauf wurde nach 1200 Sekunden von der Umgebung beendet.
+Der Export liest nun zehn Produkte pro Seite mit den ersten fuenf Varianten,
+Medien und Kollektionen je Produkt. Kollektionen werden zu zehn pro Seite mit
+je zehn Produkt-IDs gelesen. Jede noch offene Unterverbindung wird ab ihrem
+bereits gelieferten Cursor vollstaendig nachgeladen. Es gehen keine bisherigen
+Exportfelder verloren. Der Vergleich der Mitgliedschaften aus beiden Richtungen
+bleibt aktiv; Duplikate und fehlende Seiteninformationen brechen den Export ab.
+
+Der Setup-Prozess verwendet ungepufferte Python-Ausgabe. Zeitstempel, Seiten- und
+Objektzahlen sowie API-Wartezeiten erscheinen sofort im Prozessprotokoll; die
+Oberflaeche kann deren Anzeige weiterhin verzoegern. Keine Produktnamen, IDs,
+Zugangsdaten oder Antwortinhalte werden in diese Fortschrittsmeldungen aufgenommen.
+
+Ein internes Zeitbudget von 1080 Sekunden ab Python-Start begrenzt weitere
+Exportanfragen und Warteversuche, um vor dem beobachteten Plattformlimit einen
+Fehlermarker schreiben zu koennen. Dies ist keine Laufzeitgarantie: Plattformstart,
+Netzwerk und Dateisystem liegen teilweise ausserhalb dieser Kontrolle. Bei einem
+harten Plattformabbruch kann ein Fehlermarker weiterhin fehlen. Nur ein aktueller
+vollstaendiger Export darf ausgewertet werden.
+
+Nach Merge: Caching ausgeschaltet lassen, unveraendert
+`bash scripts/codex_cloud_setup.sh` verwenden und eine neue Aufgabe auf `main`
+starten. Keine Secrets in der Agentenphase verwenden. Die Optimierung wurde mit
+simulierten Seiten und Shopify-Schemavalidierung geprueft; eine gemessene Laufzeit
+fuer den echten Katalog liegt noch nicht vor.
