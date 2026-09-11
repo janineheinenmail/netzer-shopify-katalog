@@ -1,0 +1,19 @@
+# Geheimnisse und lokale Konfiguration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Lokale Shopify-Rohdaten, Sicherungen und Protokolle
+private/
+exports/
+backups/
+logs/
+*.shopify-export.json
+shop-identity*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
