@@ -140,9 +140,7 @@ class ShopifyGraphQL:
 
 
 def menu_item_fields(depth: int = 8) -> str:
-    fields = (
-        "id title type url resourceId tags resource { __typename ... on Node { id } }"
-    )
+    fields = "id title type url resourceId tags"
     return (
         fields if depth == 0 else f"{fields} items {{ {menu_item_fields(depth - 1)} }}"
     )
