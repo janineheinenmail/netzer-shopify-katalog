@@ -23,6 +23,11 @@ EVIDENCE_PATH = PRIVATE_DIR / "setup-result.json"
 EXPORT_PATH = PRIVATE_DIR / "shopify-phase-1-export.json"
 INCOMPLETE_PATH = PRIVATE_DIR / "shopify-phase-1-incomplete.json"
 MAX_PAGES = 100_000
+EXPORT_BUDGET_SECONDS = 1080
+
+
+def progress(message: str) -> None:
+    print(f"[{utc_now()}] {message}", flush=True)
 
 
 class ExportError(RuntimeError):
@@ -59,13 +64,31 @@ def clear_previous_results() -> None:
 
 
 class ShopifyGraphQL:
-    def __init__(self, shop: str, api_version: str, token: str) -> None:
+    def __init__(self, shop: str, api_version: str, token: str, deadline: float | None = None) -> None:
         self.url = f"https://{shop}/admin/api/{api_version}/graphql.json"
         self._token = token
+        self.deadline = deadline if deadline is not None else time.monotonic() + EXPORT_BUDGET_SECONDS
+        self.requests = 0
+
+    def check_deadline(self) -> float:
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ExportError("Export-Zeitbudget erreicht; kein vollstaendiger Export")
+        return remaining
+
+    def wait_for_retry(self, delay: float) -> None:
+        if delay >= self.check_deadline():
+            raise ExportError("Export-Zeitbudget waehrend API-Drosselung erreicht")
+        progress(f"API-Drosselung: Wartezeit {delay:.1f} Sekunden")
+        time.sleep(delay)
 
     def execute(self, query: str, variables: dict[str, object]) -> dict[str, object]:
         body = json.dumps({"query": query, "variables": variables}).encode()
         for attempt in range(6):
+            remaining = self.check_deadline()
+            self.requests += 1
+            if self.requests == 1 or self.requests % 25 == 0:
+                progress(f"API-Anfragen gestartet: {self.requests}")
             request = urllib.request.Request(
                 self.url,
                 data=body,
@@ -76,7 +99,7 @@ class ShopifyGraphQL:
                 method="POST",
             )
             try:
-                with urllib.request.urlopen(request, timeout=60) as response:
+                with urllib.request.urlopen(request, timeout=min(60, remaining)) as response:
                     payload = json.load(response)
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < 5:
@@ -85,7 +108,7 @@ class ShopifyGraphQL:
                     except (TypeError, ValueError):
                         delay = 2**attempt
                     delay = min(delay, 30.0)
-                    time.sleep(max(delay, 0.1))
+                    self.wait_for_retry(max(delay, 0.1))
                     continue
                 if exc.code in (401, 403):
                     raise ExportError(
@@ -108,7 +131,7 @@ class ShopifyGraphQL:
                     and isinstance(error.get("extensions"), dict)
                 }
                 if "THROTTLED" in codes and attempt < 5:
-                    time.sleep(self._throttle_delay(payload, attempt))
+                    self.wait_for_retry(self._throttle_delay(payload, attempt))
                     continue
                 if codes & {"ACCESS_DENIED", "FORBIDDEN"}:
                     raise ExportError(
@@ -157,6 +180,20 @@ PRODUCTS_QUERY = """query ExportProducts($first:Int!,$after:String) {
   products(first:$first,after:$after,sortKey:ID) {
     nodes { id title handle descriptionHtml productType vendor status tags
       createdAt updatedAt publishedAt templateSuffix options { id name position values }
+      variants(first:5) {
+    nodes { id title sku barcode price compareAtPrice inventoryQuantity inventoryPolicy
+      taxable position selectedOptions { name value } image { id url altText }
+    }
+    pageInfo { hasNextPage endCursor }
+}
+      media(first:5) {
+    nodes { id alt mediaContentType status preview { image { id url altText width height } } }
+    pageInfo { hasNextPage endCursor }
+}
+      collections(first:5) {
+    nodes { id }
+    pageInfo { hasNextPage endCursor }
+}
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -188,6 +225,7 @@ PRODUCT_COLLECTIONS_QUERY = """query ExportProductCollections($id:ID!,$first:Int
 COLLECTIONS_QUERY = """query ExportCollections($first:Int!,$after:String) {
   collections(first:$first,after:$after,sortKey:ID) {
     nodes { id title handle descriptionHtml updatedAt sortOrder templateSuffix
+      products(first:10,sortKey:ID) {  nodes { id } pageInfo { hasNextPage endCursor }  }
       ruleSet { appliedDisjunctively rules { column relation condition conditionObject { __typename } } }
       image { id url altText width height }
     }
@@ -204,51 +242,61 @@ COLLECTION_PRODUCTS_QUERY = """query ExportCollectionProducts($id:ID!,$first:Int
 
 
 def paginate(
-    client: ShopifyGraphQL, query: str, root: str, parent_id: str | None = None
+    client: ShopifyGraphQL, query: str, root: str, parent_id: str | None = None,
+    *, first: int = 100, initial_connection: dict | None = None,
+    connection_name: str | None = None,
 ) -> list[dict[str, object]]:
     nodes: list[dict[str, object]] = []
     cursor = None
     seen_cursors: set[str] = set()
-    for _ in range(MAX_PAGES):
-        variables: dict[str, object] = {"first": 100, "after": cursor}
-        if parent_id is not None:
-            variables["id"] = parent_id
-        data = client.execute(query, variables)
-        container = data.get(root) if parent_id is None else data.get(root)
-        if parent_id is not None:
-            if not isinstance(container, dict):
-                raise ExportError(f"Shopify lieferte das Elternobjekt {root} nicht")
-            connection_name = next(
-                (
-                    key
-                    for key in ("variants", "media", "collections", "products")
-                    if key in container
-                ),
-                None,
-            )
-            connection = container.get(connection_name) if connection_name else None
+    seen_ids: set[str] = set()
+    for page in range(MAX_PAGES):
+        if page == 0 and initial_connection is not None:
+            connection = initial_connection
         else:
-            connection = container
-        if not isinstance(connection, dict) or not isinstance(
-            connection.get("nodes"), list
-        ):
+            variables: dict[str, object] = {"first": first, "after": cursor}
+            if parent_id is not None:
+                variables["id"] = parent_id
+            data = client.execute(query, variables)
+            container = data.get(root)
+            if parent_id is not None:
+                if not isinstance(container, dict):
+                    raise ExportError(f"Shopify lieferte das Elternobjekt {root} nicht")
+                key = connection_name or next(
+                    (key for key in ("variants", "media", "collections", "products") if key in container), None
+                )
+                connection = container.get(key)
+            else:
+                connection = container
+        if not isinstance(connection, dict) or not isinstance(connection.get("nodes"), list):
             raise ExportError(f"Unvollstaendige Verbindung: {root}")
-        nodes.extend(connection["nodes"])
+        for node in connection["nodes"]:
+            if not isinstance(node, dict) or not isinstance(node.get("id"), str) or not node["id"]:
+                raise ExportError(f"Objekt ohne ID: {root}")
+            if node["id"] in seen_ids:
+                raise ExportError(f"Doppelte ID waehrend Pagination: {root}")
+            seen_ids.add(node["id"])
+            nodes.append(node)
         page_info = connection.get("pageInfo")
-        if not isinstance(page_info, dict) or "hasNextPage" not in page_info:
+        if not isinstance(page_info, dict) or type(page_info.get("hasNextPage")) is not bool:
             raise ExportError(f"Fehlende Seiteninformation: {root}")
+        if parent_id is None:
+            progress(f"{root}: Seite {page + 1}, bisher {len(nodes)} Objekte gelesen")
         if not page_info["hasNextPage"]:
             return nodes
         next_cursor = page_info.get("endCursor")
-        if (
-            not isinstance(next_cursor, str)
-            or not next_cursor
-            or next_cursor in seen_cursors
-        ):
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors or not connection["nodes"]:
             raise ExportError(f"Ungueltiger oder wiederholter Cursor: {root}")
         seen_cursors.add(next_cursor)
         cursor = next_cursor
     raise ExportError(f"Sicherheitslimit fuer Seitennavigation erreicht: {root}")
+
+
+def finish_nested(client, parent, field, query, root):
+    initial = parent.get(field)
+    if not isinstance(initial, dict):
+        raise ExportError(f"Fehlende eingebettete Verbindung: {field}")
+    return paginate(client, query, root, parent["id"], initial_connection=initial, connection_name=field)
 
 
 def node_ids(nodes: list[dict[str, object]], kind: str) -> list[object]:
@@ -283,28 +331,22 @@ def export_all(
     menus = paginate(client, MENUS_QUERY, "menus")
     if sum(1 for menu in menus if menu.get("handle") == "main-menu-ii") != 1:
         raise ExportError("Menue main-menu-ii fehlt oder ist nicht eindeutig")
-    products = paginate(client, PRODUCTS_QUERY, "products")
-    for product in products:
-        product_id = str(product.get("id", ""))
-        if not product_id:
-            raise ExportError("Produkt ohne ID empfangen")
-        product["variants"] = paginate(
-            client, PRODUCT_VARIANTS_QUERY, "product", product_id
-        )
-        product["media"] = paginate(client, PRODUCT_MEDIA_QUERY, "product", product_id)
-        product["collectionIds"] = node_ids(
-            paginate(client, PRODUCT_COLLECTIONS_QUERY, "product", product_id),
-            "Kollektion",
-        )
-    collections = paginate(client, COLLECTIONS_QUERY, "collections")
-    for collection in collections:
-        collection_id = str(collection.get("id", ""))
-        if not collection_id:
-            raise ExportError("Kollektion ohne ID empfangen")
-        collection["productIds"] = node_ids(
-            paginate(client, COLLECTION_PRODUCTS_QUERY, "collection", collection_id),
-            "Produkt",
-        )
+    products = paginate(client, PRODUCTS_QUERY, "products", first=10)
+    progress(f"Produktbasis gelesen: {len(products)}; vervollstaendige Unterverbindungen")
+    for index, product in enumerate(products, 1):
+        product["variants"] = finish_nested(client, product, "variants", PRODUCT_VARIANTS_QUERY, "product")
+        product["media"] = finish_nested(client, product, "media", PRODUCT_MEDIA_QUERY, "product")
+        product["collectionIds"] = node_ids(finish_nested(client, product, "collections", PRODUCT_COLLECTIONS_QUERY, "product"), "Kollektion")
+        del product["collections"]
+        if index % 25 == 0 or index == len(products):
+            progress(f"Produkte mit vollstaendigen Unterverbindungen: {index}/{len(products)}")
+    collections = paginate(client, COLLECTIONS_QUERY, "collections", first=10)
+    for index, collection in enumerate(collections, 1):
+        collection["productIds"] = node_ids(finish_nested(client, collection, "products", COLLECTION_PRODUCTS_QUERY, "collection"), "Produkt")
+        del collection["products"]
+        if index % 25 == 0 or index == len(collections):
+            progress(f"Kollektionen mit vollstaendigen Mitgliedschaften: {index}/{len(collections)}")
+    progress("Pruefe gegenseitige Produkt-Kollektionszuordnungen")
     verify_memberships(products, collections)
     return {
         "schemaVersion": 1,
@@ -322,3 +364,4 @@ def export_all(
         "products": products,
         "collections": collections,
     }
+
