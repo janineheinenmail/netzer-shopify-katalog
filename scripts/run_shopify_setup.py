@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import sys
+import time
 
 import shopify_readonly_export as exporter
 import shopify_readonly_probe as probe
 
 
 def main() -> int:
+    deadline = time.monotonic() + exporter.EXPORT_BUDGET_SECONDS
+    exporter.progress("Setup gestartet; Zeitbudget 1080 Sekunden")
     exporter.clear_previous_results()
     try:
         shop, expected_shop, expected_primary, version, client_id, client_secret = (
@@ -33,7 +36,7 @@ def main() -> int:
         print(
             "OK: Netzer-Dental-Shopidentitaet wurde bestaetigt; keine Katalogdaten vor der Pruefung gelesen."
         )
-        client = exporter.ShopifyGraphQL(shop, version, token)
+        client = exporter.ShopifyGraphQL(shop, version, token, deadline=deadline)
         result = exporter.export_all(client, identity, version)
         exporter.atomic_json(exporter.EXPORT_PATH, result)
         print(
@@ -64,3 +67,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
